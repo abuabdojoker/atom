@@ -861,7 +861,28 @@ class AtomEnvironment extends Model
 
   addProjectFolder: ->
     @pickFolder (selectedPaths = []) =>
-      @project.addPath(selectedPath) for selectedPath in selectedPaths
+      # check if no paths in project and saved project state exists.
+      @loadState(@getStateKey(selectedPaths)).then (state) =>
+        if state && @project.getPaths().length is 0
+          @restoreStateIntoEnvironment(state)
+        else
+          @project.addPath(selectedPath) for selectedPath in selectedPaths
+
+  restoreStateIntoEnvironment: (state) ->
+    shouldSerializeItem = (item) ->
+      return true unless item instanceof TextEditor
+      item.getPath() or item.isModified()
+    serializedOpenItems = (item.serialize() for item in @workspace.getPaneItems() when shouldSerializeItem(item))
+    serializedBuffers = (buffer.serialize() for buffer in @project.buffers)
+
+    state.fullScreen = @isFullScreen()
+    pane.destroy() for pane in @workspace.getPanes()
+    @deserialize(state)
+    savedBuffers = (TextBuffer.deserialize(serializedBuffer) for serializedBuffer in serializedBuffers)
+    @project.buffers = @project.buffers.concat(savedBuffers)
+
+    items = (@deserializers.deserialize(itemState) for itemState in serializedOpenItems)
+    @workspace.getPanes()[0].addItems(items, 0)
 
   showSaveDialog: (callback) ->
     callback(@showSaveDialogSync())
@@ -874,12 +895,12 @@ class AtomEnvironment extends Model
 
     @blobStore.save()
 
-  saveState: (options) ->
+  saveState: (options, storageKey) ->
     new Promise (resolve, reject) =>
       if @enablePersistence and @project
         state = @serialize(options)
         savePromise =
-          if storageKey = @getStateKey(@project?.getPaths())
+          if storageKey ?= @getStateKey(@project?.getPaths())
             @stateStore.save(storageKey, state)
           else
             @applicationDelegate.setTemporaryWindowState(state)
@@ -887,9 +908,9 @@ class AtomEnvironment extends Model
       else
         resolve()
 
-  loadState: ->
+  loadState: (stateKey) ->
     if @enablePersistence
-      if stateKey = @getStateKey(@getLoadSettings().initialPaths)
+      if stateKey ?= @getStateKey(@getLoadSettings().initialPaths)
         @stateStore.load(stateKey).then (state) =>
           if state
             state
